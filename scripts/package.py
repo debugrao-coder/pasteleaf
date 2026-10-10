@@ -110,7 +110,7 @@ def dependency_notices(metadata: dict, payload: dict[str, bytes]) -> list[dict]:
         archive_checksum = locked[(name, version, source)]["checksum"]
         cache_file = cargo_home() / "registry" / "cache" / crate.parent.name / f"{name}-{version}.crate"
         if not cache_file.is_file():
-            raise ValueError(f"Locked crate archive is missing from Cargo cache: {name} {version}; run cargo fetch --locked --target {TARGET}")
+            raise ValueError(f"Locked crate archive is missing from Cargo cache: {name} {version}; run cargo fetch --locked")
         archive_data = cache_file.read_bytes()
         if digest(archive_data) != archive_checksum:
             raise ValueError(f"Registry archive checksum does not match Cargo.lock: {name} {version}")
