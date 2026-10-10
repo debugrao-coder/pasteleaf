@@ -1,0 +1,6 @@
+/target/
+/dist/
+/test-output/
+*.tmp
+__pycache__/
+*.py[cod]

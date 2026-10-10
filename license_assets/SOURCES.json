@@ -1,0 +1,9 @@
+{
+  "BSL-1.0.txt": {
+    "source": "https://www.boost.org/LICENSE_1_0.txt",
+    "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566",
+    "license": "BSL-1.0",
+    "used_by": [{ "name": "clipboard-win", "version": "5.4.1" }],
+    "reason": "The crates.io archive declares BSL-1.0 but does not include a license file. This is the official Boost Software License 1.0 text, not a reconstructed upstream copyright notice."
+  }
+}
