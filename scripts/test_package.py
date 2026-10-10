@@ -60,7 +60,8 @@ class PackageTests(unittest.TestCase):
 
     def test_cargo_home_and_home_fallback(self):
         with tempfile.TemporaryDirectory() as directory:
-            home = Path(directory)
+            # Cargo normalizes Windows 8.3 aliases before locating its cache.
+            home = Path(directory).resolve()
             with patch.dict(os.environ, {"HOME": directory}, clear=True):
                 self.assertEqual(package.cargo_home(), home / ".cargo")
             with patch.dict(os.environ, {"HOME": directory, "CARGO_HOME": str(home / "cache")}, clear=True):

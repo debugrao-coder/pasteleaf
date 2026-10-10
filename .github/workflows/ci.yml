@@ -44,6 +44,9 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --check
 
+      - name: Prepare the locked dependency cache for offline packaging
+        run: cargo fetch --locked
+
       - name: Check Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
 

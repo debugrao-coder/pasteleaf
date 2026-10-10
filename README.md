@@ -52,6 +52,7 @@ Windows 10/11 x64 剪贴板历史与收藏工具，使用 Rust、原生 Win32 �
 
 ```powershell
 cargo fmt --all --check
+cargo fetch --locked
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --release --all-targets -- --test-threads=1
 cargo build --locked --release --bin pasteleaf
@@ -61,7 +62,7 @@ python scripts/package.py --verify dist/pasteleaf-0.1.0-windows-x64.zip
 
 构建产物为 `target/release/pasteleaf.exe`，静态链接 C 运行库。运行时无需 Rust 或开发 SDK。
 
-打包需要 Python 3.11 或更新版本，只使用 Python 标准库。它从本地 Cargo 缓存离线收集锁定依赖的许可，生成便携 ZIP、包内 `SHA256SUMS` 和 ZIP 的 `.sha256` 文件。首次构建会下载依赖；许可缓存缺失时打包会失败，不会联网替换许可。CI 在 `windows-latest` 上执行同样的检查并上传便携包；固定工具链与依赖可复现构建步骤，但不承诺不同 Windows SDK 下生成的二进制逐字节一致。
+打包需要 Python 3.11 或更新版本，只使用 Python 标准库。它从本地 Cargo 缓存离线收集锁定依赖的许可，生成便携 ZIP、包内 `SHA256SUMS` 和 ZIP 的 `.sha256` 文件。`cargo fetch --locked` 先准备锁定依赖缓存；许可缓存缺失时打包会失败，不会联网替换许可。CI 在 `windows-latest` 上执行同样的检查并上传便携包；固定工具链与依赖可复现构建步骤，但不承诺不同 Windows SDK 下生成的二进制逐字节一致。
 
 ## 开发验证
 
