@@ -129,6 +129,7 @@ mod tests {
     struct HiddenWindow {
         hwnd: HWND,
         class: Vec<u16>,
+        requested: (i32, i32),
     }
 
     impl HiddenWindow {
@@ -150,6 +151,11 @@ mod tests {
                 wc.hInstance = GetModuleHandleW(null());
                 wc.lpszClassName = class.as_ptr();
                 assert_ne!(RegisterClassW(&wc), 0);
+                // Windows clamps sizable windows to the desktop's maximum
+                // tracking dimensions, including on small CI displays.
+                let width = 1200.min(GetSystemMetrics(SM_CXMAXTRACK));
+                let height = 368.min(GetSystemMetrics(SM_CYMAXTRACK));
+                assert!(width > 0 && height > 0);
                 let hwnd = CreateWindowExW(
                     WS_EX_APPWINDOW | WS_EX_TOPMOST,
                     class.as_ptr(),
@@ -157,8 +163,8 @@ mod tests {
                     WS_POPUP | WS_THICKFRAME | WS_CLIPCHILDREN,
                     0,
                     0,
-                    1200,
-                    368,
+                    width,
+                    height,
                     null_mut(),
                     null_mut(),
                     wc.hInstance,
@@ -166,7 +172,11 @@ mod tests {
                 );
                 assert!(!hwnd.is_null());
                 assert_eq!(IsWindowVisible(hwnd), 0);
-                Self { hwnd, class }
+                Self {
+                    hwnd,
+                    class,
+                    requested: (width, height),
+                }
             }
         }
 
@@ -221,9 +231,11 @@ mod tests {
 
     #[test]
     fn created_frame_has_full_client_area_without_a_resize() {
+        let before_calculations = NC_CALCULATIONS.with(Cell::get);
         let window = HiddenWindow::new();
         let (client, outer) = window.dimensions();
-        assert_eq!(outer, (1200, 368));
+        assert!(NC_CALCULATIONS.with(Cell::get) > before_calculations);
+        assert_eq!(outer, window.requested);
         assert_eq!(
             client, outer,
             "creation must not leave a standard sizing border"
