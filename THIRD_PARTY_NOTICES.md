@@ -10,6 +10,10 @@ dependencies are:
 
 | Package | Purpose | Upstream | License expression |
 | --- | --- | --- | --- |
+| argon2 | Password key derivation | https://github.com/RustCrypto/password-hashes | MIT OR Apache-2.0 |
+| chacha20poly1305 | Authenticated sync encryption | https://github.com/RustCrypto/AEADs | Apache-2.0 OR MIT |
+| uuid | Stable sync identifiers | https://github.com/uuid-rs/uuid | Apache-2.0 OR MIT |
+| zeroize | Clear sensitive memory | https://github.com/RustCrypto/utils | Apache-2.0 OR MIT |
 | arboard | Clipboard text and images | https://github.com/1Password/arboard | MIT OR Apache-2.0 |
 | blake3 | Content hashing | https://github.com/BLAKE3-team/BLAKE3 | CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception |
 | image | PNG encoding and decoding | https://github.com/image-rs/image | MIT OR Apache-2.0 |
@@ -20,8 +24,7 @@ dependencies are:
 `scripts/package.py` resolves the locked `x86_64-pc-windows-msvc` dependency
 graph offline. It collects license, copying, copyright and notice files from
 each selected crate in the local Cargo registry, including build dependencies
-and procedural macros. This conservative inventory contains 55 third-party
-packages for the current lockfile; it does not claim every package is linked
+and procedural macros. This conservative inventory follows the current lockfile; it does not claim every package is linked
 into the executable. Other targets may use additional packages.
 
 Every portable ZIP contains `third-party/DEPENDENCIES.json`, listing the

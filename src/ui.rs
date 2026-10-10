@@ -24,12 +24,19 @@ mod frame;
 mod popup;
 #[path = "render.rs"]
 mod render;
+#[path = "sync_ui.rs"]
+mod sync_ui;
 use popup::{MenuItem, PopupMenu};
+use sync_ui::{SyncAction, SyncRuntime};
 const SEARCH: i32 = 101;
 const CATEGORY_NAME: i32 = 103;
 const HOTKEY: i32 = 113;
 const PREVIEW: i32 = 130;
 const ITEM_TEXT: i32 = 131;
+const ITEM_TAGS: i32 = 132;
+const SYNC_PATH: i32 = 140;
+const SYNC_PASSWORD: i32 = 141;
+const SYNC_CONFIRM: i32 = 142;
 const TRAY: u32 = WM_APP + 1;
 const EXIT_MESSAGE: u32 = WM_APP + 2;
 const EDIT_MENU_MESSAGE: u32 = WM_APP + 3;
@@ -55,6 +62,7 @@ const CMD_NEW: usize = 215;
 const CMD_RENAME: usize = 216;
 const CMD_DELETE_BOARD: usize = 217;
 const CMD_NEW_ITEM: usize = 218;
+const CMD_EDIT_TAGS: usize = 219;
 const CMD_PIN_BASE: usize = 1000;
 const COLORS: [u32; 6] = [0xEC6482, 0x7D7AE8, 0x48A4E8, 0xE4AA4F, 0x53B98E, 0xB381CF];
 const CARD_W: i32 = 232;
@@ -96,12 +104,16 @@ enum Dialog {
     None,
     NewBoard,
     NewItem(String),
+    EditTags(u64),
     RenameBoard(String),
     Settings,
+    Sync,
+    SyncConflict(String, usize),
     Preview(u64),
 }
 #[derive(Clone, Debug, PartialEq)]
 enum Hit {
+    Sync(SyncAction),
     Startup,
     Theme(Theme),
     Board(usize),
@@ -131,6 +143,7 @@ impl Area {
     }
 }
 struct App {
+    sync_runtime: SyncRuntime,
     popup: Option<PopupMenu>,
     popup_hwnd: HWND,
     menu_editor: Option<HWND>,
@@ -158,6 +171,8 @@ struct App {
     tray_ok: bool,
     hits: Vec<(Area, Hit)>,
     hover: Option<Hit>,
+    tips: Vec<(Area, String)>,
+    tip_point: Option<(i32, i32)>,
     dialog: Dialog,
     chosen_color: usize,
     drag_origin: Option<(i32, i32)>,
@@ -220,6 +235,7 @@ impl App {
         let palette = Palette::new(model.theme.is_dark(system_dark()));
         let edit_brush = unsafe { CreateSolidBrush(colorref(palette.input)) };
         let mut app = Self {
+            sync_runtime: SyncRuntime::new(&model),
             popup: None,
             popup_hwnd: null_mut(),
             menu_editor: None,
@@ -247,6 +263,8 @@ impl App {
             tray_ok: false,
             hits: vec![],
             hover: None,
+            tips: Vec::new(),
+            tip_point: None,
             dialog: Dialog::None,
             chosen_color: 0,
             drag_origin: None,
@@ -257,6 +275,10 @@ impl App {
             paste_attempts: 0,
         };
         app.setup_controls()?;
+        // SAFETY: timer belongs to this UI window and is canceled on destruction.
+        unsafe {
+            SetTimer(hwnd, 3, 250, None);
+        }
         app.refresh();
         app.status = format!("已加载 {} 条记录 · 本地历史已恢复", app.model.items.len());
         Ok(app)
@@ -307,13 +329,10 @@ impl App {
     fn refresh(&mut self) {
         self.board = self.board.min(self.model.categories.len());
         let q = self.text(SEARCH);
-        let category = if q.is_empty() {
-            self.board
-                .checked_sub(1)
-                .and_then(|i| self.model.categories.get(i).map(String::as_str))
-        } else {
-            None
-        };
+        let category = self
+            .board
+            .checked_sub(1)
+            .and_then(|i| self.model.categories.get(i).map(String::as_str));
         self.visible = self.model.visible(&q, category);
         if !self.visible.iter().any(|i| Some(*i) == self.selected) {
             self.selected = self.visible.first().copied();
@@ -341,9 +360,18 @@ impl App {
         self.invalidate();
     }
     fn commit(&mut self, next: Model) -> Result<(), String> {
+        self.commit_action(next, None)
+    }
+    fn commit_action(&mut self, mut next: Model, deleted: Option<u64>) -> Result<(), String> {
+        pasteleaf::sync::record_changes(&self.model, &mut next, deleted)?;
         self.store.save(&next)?;
         self.model = next;
-        if let Err(e) = self.store.cleanup(&self.model) {
+        self.sync_runtime.changed();
+        if let Err(e) = if self.sync_runtime.busy() {
+            Ok(())
+        } else {
+            self.store.cleanup(&self.model)
+        } {
             self.status = format!("已保存；图片清理待重试：{e}");
         }
         self.refresh();
@@ -437,6 +465,7 @@ impl App {
         }
         self.hotkey_id = Some(id);
         self.model = next;
+        self.sync_runtime.changed();
         self.notify(format!("快捷键已保存：{}", self.model.hotkey));
         Ok(())
     }
@@ -593,6 +622,10 @@ impl App {
                 (HOTKEY, ES_AUTOHSCROLL),
                 (PREVIEW, ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY),
                 (ITEM_TEXT, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN),
+                (ITEM_TAGS, ES_AUTOHSCROLL),
+                (SYNC_PATH, ES_AUTOHSCROLL),
+                (SYNC_PASSWORD, ES_AUTOHSCROLL | ES_PASSWORD),
+                (SYNC_CONFIRM, ES_AUTOHSCROLL | ES_PASSWORD),
             ] {
                 let h = CreateWindowExW(
                     0,
@@ -629,6 +662,8 @@ impl App {
                         512 * 1024
                     } else if id == SEARCH {
                         200
+                    } else if id == ITEM_TAGS || id == SYNC_PATH {
+                        4096
                     } else {
                         80
                     },
@@ -639,7 +674,7 @@ impl App {
                 self.control(SEARCH),
                 EM_SETCUEBANNER,
                 1,
-                wide("搜索剪贴板").as_ptr() as isize,
+                wide("搜索内容或标签").as_ptr() as isize,
             );
             SendMessageW(
                 self.control(CATEGORY_NAME),
@@ -658,6 +693,7 @@ impl App {
         Ok(())
     }
     fn layout_controls(&self) {
+        self.layout_sync_controls();
         let compact = self.width < 800;
         let item_width = (self.width - 48).min(720);
         // SAFETY: owned controls; positions are converted from logical to physical pixels.
@@ -708,9 +744,45 @@ impl App {
                 self.px((self.width - item_width) / 2 + 30),
                 self.px(152),
                 self.px(item_width - 60),
-                self.px(104),
+                self.px(58),
                 1,
             );
+            MoveWindow(
+                self.control(ITEM_TAGS),
+                self.px((self.width - item_width) / 2 + 30),
+                self.px(if matches!(self.dialog, Dialog::NewItem(_)) {
+                    246
+                } else {
+                    174
+                }),
+                self.px(item_width - 60),
+                self.px(23),
+                1,
+            );
+            if let Dialog::SyncConflict(entity, index) = &self.dialog {
+                let heads = self.model.sync.heads(entity);
+                let image = heads.get(*index % heads.len().max(1)).is_some_and(|o| {
+                    matches!(
+                        o.value,
+                        pasteleaf::sync::Value::Record(pasteleaf::sync::Record {
+                            content: Content::Image { .. },
+                            ..
+                        })
+                    )
+                });
+                MoveWindow(
+                    self.control(PREVIEW),
+                    self.px((self.width - item_width) / 2 + 24),
+                    self.px(128),
+                    self.px(if image {
+                        item_width / 2 - 32
+                    } else {
+                        item_width - 48
+                    }),
+                    self.px(140),
+                    1,
+                );
+            }
         }
     }
     fn reset_fonts(&mut self, scale: f32) {
@@ -736,7 +808,17 @@ impl App {
                     wide("Segoe UI").as_ptr(),
                 )
             });
-            for id in [SEARCH, CATEGORY_NAME, HOTKEY, PREVIEW, ITEM_TEXT] {
+            for id in [
+                SEARCH,
+                CATEGORY_NAME,
+                HOTKEY,
+                PREVIEW,
+                ITEM_TEXT,
+                ITEM_TAGS,
+                SYNC_PATH,
+                SYNC_PASSWORD,
+                SYNC_CONFIRM,
+            ] {
                 SendMessageW(self.control(id), WM_SETFONT, self.fonts[0] as usize, 1);
             }
             for font in old {
@@ -748,14 +830,34 @@ impl App {
     fn open_dialog(&mut self, dialog: Dialog) {
         self.close_menu();
         self.dialog = dialog;
+        self.tip_point = None;
         self.status.clear();
         self.chosen_color = 0;
         // SAFETY: only the active editor is shown; modal background is custom drawn.
         unsafe {
-            for id in [CATEGORY_NAME, HOTKEY, PREVIEW, ITEM_TEXT] {
+            for id in [
+                CATEGORY_NAME,
+                HOTKEY,
+                PREVIEW,
+                ITEM_TEXT,
+                ITEM_TAGS,
+                SYNC_PATH,
+                SYNC_PASSWORD,
+                SYNC_CONFIRM,
+            ] {
                 ShowWindow(self.control(id), SW_HIDE);
             }
             match &self.dialog {
+                Dialog::Sync => {
+                    self.prepare_sync_dialog();
+                }
+                Dialog::SyncConflict(entity, index) => {
+                    let entity = entity.clone();
+                    let index = *index;
+                    self.prepare_conflict(&entity, index);
+                    ShowWindow(self.control(PREVIEW), SW_SHOW);
+                    SetFocus(self.control(PREVIEW));
+                }
                 Dialog::NewBoard => {
                     self.set_text(CATEGORY_NAME, "");
                     ShowWindow(self.control(CATEGORY_NAME), SW_SHOW);
@@ -763,8 +865,23 @@ impl App {
                 }
                 Dialog::NewItem(_) => {
                     self.set_text(ITEM_TEXT, "");
+                    self.set_text(ITEM_TAGS, "");
+                    ShowWindow(self.control(ITEM_TAGS), SW_SHOW);
                     ShowWindow(self.control(ITEM_TEXT), SW_SHOW);
                     SetFocus(self.control(ITEM_TEXT));
+                }
+                Dialog::EditTags(id) => {
+                    let tags = self
+                        .model
+                        .items
+                        .iter()
+                        .find(|item| item.id == *id)
+                        .map(|item| item.tags.join(", "))
+                        .unwrap_or_default();
+                    self.set_text(ITEM_TAGS, &tags);
+                    ShowWindow(self.control(ITEM_TAGS), SW_SHOW);
+                    SetFocus(self.control(ITEM_TAGS));
+                    SendMessageW(self.control(ITEM_TAGS), EM_SETSEL, 0, -1);
                 }
                 Dialog::RenameBoard(name) => {
                     self.set_text(CATEGORY_NAME, name);
@@ -810,20 +927,36 @@ impl App {
         self.dialog = Dialog::None;
         // SAFETY: hiding children doesn't destroy saved data.
         unsafe {
-            for id in [CATEGORY_NAME, HOTKEY, PREVIEW, ITEM_TEXT] {
+            for id in [
+                CATEGORY_NAME,
+                HOTKEY,
+                PREVIEW,
+                ITEM_TEXT,
+                ITEM_TAGS,
+                SYNC_PATH,
+                SYNC_PASSWORD,
+                SYNC_CONFIRM,
+            ] {
                 ShowWindow(self.control(id), SW_HIDE);
             }
             SetFocus(self.hwnd);
         }
         self.set_text(ITEM_TEXT, "");
+        self.set_text(ITEM_TAGS, "");
+        self.set_text(SYNC_PASSWORD, "");
+        self.set_text(SYNC_CONFIRM, "");
         self.layout_controls();
         self.invalidate();
     }
     fn accept_dialog(&mut self) -> Result<(), String> {
+        if matches!(self.dialog, Dialog::Sync | Dialog::SyncConflict(..)) {
+            return Ok(());
+        }
         match self.dialog.clone() {
             Dialog::NewItem(category) => {
                 let mut next = self.model.clone();
                 let id = next.add_favorite_text(&self.text(ITEM_TEXT), &category)?;
+                next.set_tags(id, &self.text(ITEM_TAGS))?;
                 if let Some(item) = next.items.iter_mut().find(|item| item.id == id) {
                     item.copied_at = timestamp();
                 }
@@ -845,6 +978,12 @@ impl App {
                 if self.status.is_empty() {
                     self.status = format!("已添加到「{category}」");
                 }
+            }
+            Dialog::EditTags(id) => {
+                let mut next = self.model.clone();
+                next.set_tags(id, &self.text(ITEM_TAGS))?;
+                self.commit(next)?;
+                self.status = "标签已保存".into();
             }
             Dialog::NewBoard => {
                 let mut n = self.model.clone();
@@ -885,6 +1024,7 @@ impl App {
     }
     fn click(&mut self, h: Hit) -> Result<(), String> {
         match h {
+            Hit::Sync(action) => self.sync_action(action)?,
             Hit::Startup => {
                 let enabled = pasteleaf::startup::enabled()?;
                 if let Err(error) = pasteleaf::startup::set_enabled(!enabled) {
@@ -949,6 +1089,10 @@ impl App {
     }
     fn command(&mut self, id: usize) -> Result<(), String> {
         match id {
+            CMD_EDIT_TAGS => {
+                let id = self.selected.ok_or("请先选择收藏项")?;
+                self.open_dialog(Dialog::EditTags(id));
+            }
             CMD_PASTE => self.paste_selected()?,
             CMD_COPY => self.copy_selected()?,
             CMD_PREVIEW => {
@@ -961,7 +1105,7 @@ impl App {
                     if self.confirm("删除这条记录？此操作不能撤销。") {
                         let mut n = self.model.clone();
                         n.items.retain(|x| x.id != i);
-                        self.commit(n)?;
+                        self.commit_action(n, Some(i))?;
                     }
                 }
             }
@@ -1104,6 +1248,7 @@ impl App {
                         MenuItem::action("粘贴", "Enter", CMD_PASTE),
                         MenuItem::action("复制", "Ctrl+C", CMD_COPY),
                         MenuItem::action("预览", "Space", CMD_PREVIEW),
+                        MenuItem::action("编辑标签…", "", CMD_EDIT_TAGS),
                         MenuItem::separator(),
                         MenuItem::submenu("收藏到", categories),
                         unpin,
@@ -1165,7 +1310,7 @@ impl App {
         // SAFETY: only the five owned EDIT controls are accepted. EM_GETSEL uses
         // full DWORD output pointers so selections beyond 65,535 stay intact.
         unsafe {
-            if ![SEARCH, CATEGORY_NAME, HOTKEY, PREVIEW, ITEM_TEXT]
+            if ![SEARCH, CATEGORY_NAME, HOTKEY, PREVIEW, ITEM_TEXT, ITEM_TAGS]
                 .iter()
                 .any(|id| self.control(*id) == editor)
             {
@@ -1413,7 +1558,7 @@ impl App {
         if key == VK_APPS || (shift && key == VK_F10) {
             // SAFETY: current UI-thread focus; only owned EDITs are accepted.
             let focus = unsafe { GetFocus() };
-            if [SEARCH, CATEGORY_NAME, HOTKEY, PREVIEW, ITEM_TEXT]
+            if [SEARCH, CATEGORY_NAME, HOTKEY, PREVIEW, ITEM_TEXT, ITEM_TAGS]
                 .iter()
                 .any(|id| self.control(*id) == focus)
             {
@@ -1442,6 +1587,29 @@ impl App {
             return Ok(true);
         }
         if self.dialog != Dialog::None {
+            if key == VK_TAB && self.dialog == Dialog::Sync {
+                let ids = [SYNC_PATH, SYNC_PASSWORD, SYNC_CONFIRM];
+                // SAFETY: controls belong to this window.
+                unsafe {
+                    let index = ids
+                        .iter()
+                        .position(|id| self.control(*id) == GetFocus())
+                        .unwrap_or(0);
+                    SetFocus(self.control(ids[(index + if shift { 2 } else { 1 }) % 3]));
+                }
+                return Ok(true);
+            }
+            if key == VK_TAB && matches!(self.dialog, Dialog::NewItem(_)) {
+                // SAFETY: both controls belong to the active dialog.
+                unsafe {
+                    SetFocus(self.control(if GetFocus() == self.control(ITEM_TEXT) {
+                        ITEM_TAGS
+                    } else {
+                        ITEM_TEXT
+                    }));
+                }
+                return Ok(true);
+            }
             if matches!(self.dialog, Dialog::NewItem(_)) {
                 if ctrl && key == VK_RETURN {
                     self.accept_dialog()?;
@@ -1845,6 +2013,10 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                     a.finish_paste();
                     Some(0)
                 }
+                WM_TIMER if wp == 3 => {
+                    a.sync_tick();
+                    Some(0)
+                }
                 TRAY => {
                     match lp as u32 {
                         WM_LBUTTONUP => a.show(),
@@ -1889,6 +2061,21 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                 WM_MOUSEMOVE => {
                     let x = ((lp as u16 as i16) as f32 / a.scale) as i32;
                     let y = (((lp >> 16) as u16 as i16) as f32 / a.scale) as i32;
+                    let old_tip = a.tip_point.and_then(|(tx, ty)| {
+                        a.tips.iter().position(|(area, _)| area.contains(tx, ty))
+                    });
+                    let new_tip = a.tips.iter().position(|(area, _)| area.contains(x, y));
+                    a.tip_point = Some((x, y));
+                    if old_tip != new_tip {
+                        a.invalidate();
+                    }
+                    let mut tracking = TRACKMOUSEEVENT {
+                        cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+                        dwFlags: TME_LEAVE,
+                        hwndTrack: hwnd,
+                        dwHoverTime: 0,
+                    };
+                    TrackMouseEvent(&mut tracking);
                     if let Some((ox, oy)) = a.drag_origin {
                         if (x - ox).abs() + (y - oy).abs() > 8 {
                             a.dragging = true;
@@ -1919,6 +2106,12 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                 }
                 WM_CAPTURECHANGED => {
                     a.drag_origin = None;
+                    Some(0)
+                }
+                WM_MOUSELEAVE => {
+                    a.tip_point = None;
+                    a.hover = None;
+                    a.invalidate();
                     Some(0)
                 }
                 WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
@@ -1996,7 +2189,7 @@ pub fn run() -> Result<(), String> {
         .or_else(|| std::env::var_os("LOCALAPPDATA").map(|s| PathBuf::from(s).join("PasteLeaf")))
         .ok_or("找不到本地数据目录")?;
     let store = Store::new(root)?;
-    let model = store.load()?;
+    let mut model = store.load()?;
     let key = blake3::hash(store.root.to_string_lossy().to_lowercase().as_bytes()).to_hex();
     // SAFETY: all native resources belong to this thread until the loop terminates.
     unsafe {
@@ -2011,6 +2204,12 @@ pub fn run() -> Result<(), String> {
                 return Ok(());
             }
             return Err("PasteLeaf 已在运行，请用快捷键或托盘打开。".into());
+        }
+        if pasteleaf::sync::initialize_identifiers(&mut model) {
+            if let Err(error) = store.save(&model) {
+                CloseHandle(mutex);
+                return Err(error);
+            }
         }
         let graphics = render::start_graphics()?;
         let instance = GetModuleHandleW(null());

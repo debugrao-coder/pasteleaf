@@ -1,4 +1,428 @@
 use super::*;
+
+#[test]
+fn sync_settings_native_controls_themes_scales_and_cancel() {
+    let _graphics = ManualFavoriteGraphics(render::start_graphics().unwrap());
+    let mut fixture = ManualFavoriteFixture::new();
+    let app = &mut fixture.app;
+    let before = serde_json::to_vec(&app.model).unwrap();
+    for theme in [Theme::Dark, Theme::Light] {
+        app.model.theme = theme;
+        app.refresh_theme();
+        for scale in [1.0, 1.5, 2.0] {
+            app.reset_fonts(scale);
+            for width in [488, 1200] {
+                app.width = width;
+                app.open_dialog(Dialog::Sync);
+                app.set_text(SYNC_PATH, "C:\\合成测试\\iCloud Drive\\PasteLeaf Sync");
+                render_tag_snapshot(
+                    app,
+                    &format!("sync-{theme:?}-{}-{width}", (scale * 100.) as i32),
+                );
+                assert!(app
+                    .hits
+                    .iter()
+                    .any(|(_, hit)| *hit == Hit::Sync(SyncAction::Create)));
+                for control in [SYNC_PATH, SYNC_PASSWORD, SYNC_CONFIRM] {
+                    let mut bounds: RECT = unsafe { zeroed() };
+                    // SAFETY: read rectangles and styles of isolated test-owned EDITs.
+                    unsafe {
+                        GetWindowRect(app.control(control), &mut bounds);
+                        MapWindowPoints(null_mut(), app.hwnd, (&mut bounds as *mut RECT).cast(), 2);
+                        if control != SYNC_PATH {
+                            assert_ne!(
+                                GetWindowLongW(app.control(control), GWL_STYLE) & ES_PASSWORD,
+                                0
+                            );
+                        }
+                    }
+                    assert!(bounds.left >= 0 && bounds.right <= app.px(width));
+                    assert!(bounds.top >= 0 && bounds.bottom < app.px(214));
+                }
+                for (area, _) in &app.hits {
+                    assert!(area.x >= 0 && area.x + area.w <= width);
+                }
+                app.set_text(SYNC_PASSWORD, "synthetic-draft-only");
+                app.keyboard(VK_ESCAPE).unwrap();
+                assert!(app.text(SYNC_PASSWORD).is_empty());
+                assert!(app.model.sync.config.is_none());
+            }
+        }
+    }
+    app.model.theme = serde_json::from_slice::<Model>(&before).unwrap().theme;
+    assert_eq!(before, serde_json::to_vec(&app.model).unwrap());
+}
+
+#[test]
+fn sync_background_result_rebases_on_new_local_edits_and_persists_ack() {
+    let mut fixture = ManualFavoriteFixture::new();
+    let app = &mut fixture.app;
+    let remote = std::env::temp_dir().join(format!("pasteleaf-sync-ui-{}", pasteleaf::sync::id()));
+    let (model, key) = pasteleaf::sync::connect(
+        &app.model,
+        &app.store.root,
+        &remote,
+        "synthetic UI sync password",
+        true,
+        false,
+        true,
+    )
+    .unwrap();
+    app.store.save(&model).unwrap();
+    app.model = model;
+    app.sync_runtime = SyncRuntime::new(&app.model);
+    app.sync_runtime.key = Some(key);
+    app.sync_tick();
+    assert!(app.sync_runtime.busy());
+    let mut changed = app.model.clone();
+    changed
+        .add_favorite_text("created while sync was running", "收藏")
+        .unwrap();
+    app.commit(changed).unwrap();
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(12);
+    while app.sync_runtime.last.is_none() && std::time::Instant::now() < end {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        app.sync_tick();
+    }
+    assert!(
+        app.sync_runtime.last.is_some(),
+        "{}",
+        app.sync_runtime.status
+    );
+    assert!(app
+        .store
+        .load()
+        .unwrap()
+        .items
+        .iter()
+        .any(|i| i.content == Content::Text("created while sync was running".into())));
+    assert!(
+        !app.model.sync.outbox.is_empty(),
+        "new edits must remain queued after acknowledging the older worker snapshot"
+    );
+    app.sync_action(SyncAction::Now).unwrap();
+    app.sync_tick();
+    while app.sync_runtime.busy() && std::time::Instant::now() < end {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        app.sync_tick();
+    }
+    assert!(app.store.load().unwrap().sync.outbox.is_empty());
+    std::fs::remove_dir_all(remote).unwrap();
+}
+
+#[test]
+fn sync_connected_settings_and_conflict_versions_are_rendered_and_actionable() {
+    let _graphics = ManualFavoriteGraphics(render::start_graphics().unwrap());
+    let mut fixture = ManualFavoriteFixture::new();
+    let app = &mut fixture.app;
+    let remote = std::env::temp_dir().join(format!(
+        "pasteleaf-sync-conflict-ui-{}",
+        pasteleaf::sync::id()
+    ));
+    let (model, key) = pasteleaf::sync::connect(
+        &app.model,
+        &app.store.root,
+        &remote,
+        "synthetic conflict password",
+        true,
+        false,
+        true,
+    )
+    .unwrap();
+    app.model = model;
+    app.sync_runtime = SyncRuntime::new(&app.model);
+    app.sync_runtime.key = Some(key);
+    let id = app
+        .model
+        .add_favorite_text("synthetic conflict text", "收藏")
+        .unwrap();
+    let old = app.model.clone();
+    pasteleaf::sync::record_changes(&old, &mut app.model, None).unwrap();
+    let mut other = app.model.clone();
+    other.sync.device = pasteleaf::sync::id();
+    let old = other.clone();
+    other.set_tags(id, "remote tag").unwrap();
+    pasteleaf::sync::record_changes(&old, &mut other, None).unwrap();
+    let old = app.model.clone();
+    app.model.set_tags(id, "local tag").unwrap();
+    pasteleaf::sync::record_changes(&old, &mut app.model, None).unwrap();
+    pasteleaf::sync::merge(
+        &mut app.model,
+        pasteleaf::sync::Exchange {
+            operations: other.sync.operations.values().cloned().collect(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let entity = app.model.sync.conflicts()[0].clone();
+    for theme in [Theme::Dark, Theme::Light] {
+        app.model.theme = theme;
+        app.refresh_theme();
+        for scale in [1.0, 1.5, 2.0] {
+            app.reset_fonts(scale);
+            for width in [488, 1200] {
+                app.width = width;
+                app.open_dialog(Dialog::Sync);
+                render_tag_snapshot(
+                    app,
+                    &format!("sync-connected-{theme:?}-{}-{width}", (scale * 100.) as i32),
+                );
+                assert!(app
+                    .hits
+                    .iter()
+                    .any(|(_, h)| *h == Hit::Sync(SyncAction::Disconnect)));
+                app.open_dialog(Dialog::SyncConflict(entity.clone(), 0));
+                render_tag_snapshot(
+                    app,
+                    &format!("sync-conflict-{theme:?}-{}-{width}", (scale * 100.) as i32),
+                );
+                assert!(app.text(PREVIEW).contains("synthetic conflict text"));
+                let first = app.text(PREVIEW);
+                app.sync_action(SyncAction::NextVersion).unwrap();
+                assert_ne!(first, app.text(PREVIEW));
+                let mut bounds: RECT = unsafe { zeroed() };
+                unsafe {
+                    GetWindowRect(app.control(PREVIEW), &mut bounds);
+                    MapWindowPoints(null_mut(), app.hwnd, (&mut bounds as *mut RECT).cast(), 2);
+                }
+                assert!(bounds.left >= 0 && bounds.right <= app.px(width));
+            }
+        }
+    }
+    app.sync_action(SyncAction::KeepBoth).unwrap();
+    assert!(app.model.sync.conflicts().is_empty());
+    assert!(app.model.items.iter().any(|i| i.tags == vec!["local tag"]));
+    assert!(app.model.items.iter().any(|i| i.tags == vec!["remote tag"]));
+    std::fs::remove_dir_all(remote).unwrap();
+}
+
+fn render_tag_snapshot(app: &mut App, name: &str) {
+    let width = app.px(app.width);
+    let height = app.px(PANEL_H);
+    let mut pixels = vec![0u8; (width * height * 4) as usize];
+    // SAFETY: isolated offscreen bitmap; no desktop pixels or clipboard data are read.
+    unsafe {
+        let screen = GetDC(app.hwnd);
+        let dc = CreateCompatibleDC(screen);
+        let bitmap = CreateCompatibleBitmap(screen, width, height);
+        assert!(!dc.is_null() && !bitmap.is_null());
+        let previous = SelectObject(dc, bitmap);
+        app.draw_content(dc);
+        SelectObject(dc, previous);
+        let mut info: BITMAPINFO = zeroed();
+        info.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
+        info.bmiHeader.biWidth = width;
+        info.bmiHeader.biHeight = -height;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB;
+        assert_eq!(
+            GetDIBits(
+                dc,
+                bitmap,
+                0,
+                height as u32,
+                pixels.as_mut_ptr().cast(),
+                &mut info,
+                DIB_RGB_COLORS
+            ),
+            height
+        );
+        DeleteObject(bitmap);
+        DeleteDC(dc);
+        ReleaseDC(app.hwnd, screen);
+    }
+    for pixel in pixels.as_chunks_mut::<4>().0 {
+        pixel.swap(0, 2);
+        pixel[3] = 255;
+    }
+    assert!(pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|p| p[0] > 230 && p[1] > 230 && p[2] > 230));
+    if let Some(output) = std::env::var_os("PASTELEAF_RENDER_OUTPUT") {
+        let path = PathBuf::from(output);
+        std::fs::create_dir_all(&path).unwrap();
+        image::save_buffer(
+            path.join(format!("{name}.png")),
+            &pixels,
+            width as u32,
+            height as u32,
+            image::ColorType::Rgba8,
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn tags_render_themes_scales_and_overflow_without_exposing_payload_in_tooltips() {
+    let _graphics = ManualFavoriteGraphics(render::start_graphics().unwrap());
+    let mut fixture = ManualFavoriteFixture::new();
+    let app = &mut fixture.app;
+    app.model.items.clear();
+    app.model
+        .add_favorite_text("https://example.com", "收藏")
+        .unwrap();
+    app.model
+        .add_favorite_text("const count = 3;", "收藏")
+        .unwrap();
+    let picture = app.store.write_image(4, 4, &[140; 64]).unwrap();
+    let id = app.model.capture(picture).unwrap();
+    app.model.assign(id, Some("收藏".into())).unwrap();
+    app.model
+        .set_tags(
+            id,
+            "这是一个很长的中文标签用于验证边界,设计,图片,工作,参考,归档,素材,示例",
+        )
+        .unwrap();
+    let text_id = app
+        .model
+        .add_favorite_text("Synthetic preview\r\nSample content only", "收藏")
+        .unwrap();
+    app.model.set_tags(text_id, "workbuddy2api,密码").unwrap();
+    app.select_board(1);
+    app.status.clear();
+    for theme in [Theme::Dark, Theme::Light] {
+        app.model.theme = theme;
+        app.refresh_theme();
+        for scale in [1.0, 1.5, 2.0] {
+            app.reset_fonts(scale);
+            for width in [488, 1200] {
+                app.width = width;
+                app.tip_point = None;
+                let name = format!("tags-{theme:?}-{}-{width}", (scale * 100.) as i32);
+                render_tag_snapshot(app, &name);
+                assert!(app.tips.iter().any(|(_, s)| s == "文本"));
+                assert!(app.tips.iter().any(|(_, s)| s == "workbuddy2api\n密码"));
+                assert!(app.tips.iter().all(|(a, text)| a.x >= 0
+                    && a.x + a.w <= width
+                    && !text.contains("Synthetic preview")));
+                if width == 1200 {
+                    for kind in ["图片", "代码", "链接"] {
+                        assert!(app.tips.iter().any(|(_, s)| s == kind));
+                    }
+                    app.tip_point = Some((316, CARD_TOP + 53));
+                    render_tag_snapshot(app, &format!("{name}-tooltip"));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn tags_search_stays_in_selected_collection_and_editor_scales() {
+    let _graphics = ManualFavoriteGraphics(render::start_graphics().unwrap());
+    let mut fixture = ManualFavoriteFixture::new();
+    let app = &mut fixture.app;
+    let id = app.model.add_favorite_text("synthetic", "工作").unwrap();
+    app.model.set_tags(id, "查找").unwrap();
+    app.select_board(1);
+    app.set_text(SEARCH, "查找");
+    app.refresh();
+    assert!(app.visible.is_empty());
+    app.select_board(0);
+    app.set_text(SEARCH, "查找");
+    app.refresh();
+    assert_eq!(app.visible, vec![id]);
+    for scale in [1.0, 1.5, 2.0] {
+        app.reset_fonts(scale);
+        for width in [488, 744, 1200] {
+            app.width = width;
+            for dialog in [Dialog::NewItem("收藏".into()), Dialog::EditTags(id)] {
+                app.open_dialog(dialog.clone());
+                let mut bounds: RECT = unsafe { zeroed() };
+                // SAFETY: bounds of this fixture's own EDIT only.
+                unsafe {
+                    GetWindowRect(app.control(ITEM_TAGS), &mut bounds);
+                    MapWindowPoints(null_mut(), app.hwnd, (&mut bounds as *mut RECT).cast(), 2);
+                }
+                assert!(bounds.left >= 0 && bounds.right <= app.px(width));
+                assert!(bounds.top >= 0 && bounds.bottom < app.px(282));
+                app.keyboard(VK_ESCAPE).unwrap();
+                assert_eq!(app.dialog, Dialog::None);
+                assert_eq!(
+                    unsafe { GetWindowLongW(app.control(ITEM_TAGS), GWL_STYLE) } as u32
+                        & WS_VISIBLE,
+                    0
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn tags_new_item_normalizes_and_rejects_limits_without_losing_draft() {
+    let mut fixture = ManualFavoriteFixture::new();
+    let app = &mut fixture.app;
+    app.select_board(1);
+    app.command(218).unwrap();
+    assert!(!app.control(132).is_null(), "tag input must exist");
+    app.set_text(131, "synthetic body");
+    app.set_text(132, &"长".repeat(25));
+    assert!(app.accept_dialog().is_err());
+    assert_eq!(app.text(131), "synthetic body");
+    app.set_text(132, "a,b,c,d,e,f,g,h,i");
+    assert!(app.accept_dialog().is_err());
+    app.set_text(
+        132,
+        " workbuddy2api ， 密码,workbuddy2api, WORKBUDDY2API, , ",
+    );
+    app.accept_dialog().unwrap();
+    let value = serde_json::to_value(app.store.load().unwrap()).unwrap();
+    assert_eq!(
+        value["items"][0]["tags"],
+        serde_json::json!(["workbuddy2api", "密码"])
+    );
+    assert_eq!(value["items"][0]["content"]["Text"], "synthetic body");
+}
+
+#[test]
+fn tags_edit_cancel_and_failed_save_preserve_previous_data() {
+    let mut fixture = ManualFavoriteFixture::new();
+    let app = &mut fixture.app;
+    let id = app
+        .model
+        .add_favorite_text("synthetic body", "收藏")
+        .unwrap();
+    app.store.save(&app.model).unwrap();
+    app.selected = Some(id);
+    app.command(219).unwrap();
+    assert_ne!(
+        app.dialog,
+        Dialog::None,
+        "edit-tags command must open editor"
+    );
+    app.set_text(132, "cancelled");
+    let before = serde_json::to_vec(&app.model).unwrap();
+    app.close_dialog();
+    assert_eq!(serde_json::to_vec(&app.model).unwrap(), before);
+    app.command(219).unwrap();
+    assert_eq!(app.text(132), "");
+    app.set_text(132, "workbuddy2api，密码");
+    let disk = std::fs::read(app.store.root.join("library.json")).unwrap();
+    let obstruction = app.store.root.join("library.json.tmp");
+    std::fs::create_dir(&obstruction).unwrap();
+    assert!(app.accept_dialog().is_err());
+    assert_eq!(app.text(132), "workbuddy2api，密码");
+    assert_eq!(serde_json::to_vec(&app.model).unwrap(), before);
+    assert_eq!(
+        std::fs::read(app.store.root.join("library.json")).unwrap(),
+        disk
+    );
+    std::fs::remove_dir(obstruction).unwrap();
+    app.accept_dialog().unwrap();
+    assert_eq!(app.dialog, Dialog::None);
+    assert_eq!(
+        app.store.load().unwrap().visible("密码", Some("收藏")),
+        vec![id]
+    );
+    app.command(219).unwrap();
+    assert_eq!(app.text(132), "workbuddy2api, 密码");
+    app.set_text(132, "");
+    app.accept_dialog().unwrap();
+    assert!(app.store.load().unwrap().visible("密码", None).is_empty());
+}
 use std::{
     sync::mpsc,
     time::{SystemTime, UNIX_EPOCH},
@@ -244,7 +668,7 @@ fn themed_menu_card_and_category_preserve_complete_command_sets() {
     assert_eq!(app.selected, Some(id));
     assert_eq!(
         themed_menu_actions(app),
-        vec![201, 202, 203, 1000, 1001, 205, 204]
+        vec![201, 202, 203, 219, 1000, 1001, 205, 204]
     );
     app.run_menu_action(1001).unwrap();
     assert_eq!(app.model.items[0].category.as_deref(), Some("工作"));

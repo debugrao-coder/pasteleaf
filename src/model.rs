@@ -16,6 +16,8 @@ pub struct Item {
     pub content: Content,
     pub category: Option<String>,
     #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
     pub source: String,
     #[serde(default)]
     pub copied_at: u64,
@@ -23,6 +25,8 @@ pub struct Item {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Model {
+    #[serde(default)]
+    pub sync: crate::sync::State,
     #[serde(default)]
     pub theme: crate::theme::Theme,
     pub version: u32,
@@ -38,6 +42,7 @@ pub struct Model {
 impl Default for Model {
     fn default() -> Self {
         Self {
+            sync: Default::default(),
             theme: Default::default(),
             version: 1,
             items: vec![],
@@ -95,6 +100,7 @@ impl Model {
                 id,
                 content,
                 category: Some(category.into()),
+                tags: Vec::new(),
                 source: "手动添加".into(),
                 copied_at: 0,
             },
@@ -131,6 +137,7 @@ impl Model {
                 id,
                 content,
                 category: None,
+                tags: Vec::new(),
                 source: String::new(),
                 copied_at: 0,
             },
@@ -145,6 +152,30 @@ impl Model {
             }
         });
         Ok(id)
+    }
+    /// Update descriptive metadata without changing the clipboard payload.
+    pub fn set_tags(&mut self, id: u64, input: &str) -> Result<(), String> {
+        let mut tags = Vec::new();
+        for tag in input
+            .split([',', '，'])
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            if tags
+                .iter()
+                .any(|s: &String| s.to_lowercase() == tag.to_lowercase())
+            {
+                continue;
+            }
+            tags.push(tag.to_string());
+        }
+        validate_tags(&tags)?;
+        self.items
+            .iter_mut()
+            .find(|item| item.id == id)
+            .ok_or("记录不存在")?
+            .tags = tags;
+        Ok(())
     }
     pub fn assign(&mut self, id: u64, category: Option<String>) -> Result<(), String> {
         if let Some(c) = &category {
@@ -196,6 +227,9 @@ impl Model {
             return Err("分类名称已存在".into());
         }
         self.categories[index] = new.into();
+        if let Some(id) = self.sync.category_ids.remove(old) {
+            self.sync.category_ids.insert(new.into(), id);
+        }
         if let Some(color) = self.category_colors.remove(old) {
             self.category_colors.insert(new.into(), color);
         }
@@ -231,7 +265,9 @@ impl Model {
                     Content::Text(text) => text.to_lowercase().contains(&query),
                     Content::Image { .. } => "图片 image png".contains(&query),
                 };
-                matches_category && matches_query
+                matches_category
+                    && (matches_query
+                        || x.tags.iter().any(|tag| tag.to_lowercase().contains(&query)))
             })
             .map(|x| x.id)
             .collect()
@@ -252,6 +288,7 @@ impl Model {
         let mut text_bytes = 0;
         for item in &self.items {
             item.content.validate()?;
+            validate_tags(&item.tags)?;
             text_bytes += item.content.text_len();
             if item.id == 0 || item.id >= self.next_id || !ids.insert(item.id) {
                 return Err("无效记录编号".into());
@@ -267,6 +304,26 @@ impl Model {
         }
         Ok(())
     }
+}
+
+fn validate_tags(tags: &[String]) -> Result<(), String> {
+    if tags.len() > 8 {
+        return Err("每条内容最多添加 8 个标签".into());
+    }
+    let mut seen = std::collections::HashSet::new();
+    for tag in tags {
+        if tag.is_empty()
+            || tag.trim() != tag
+            || tag.chars().count() > 24
+            || tag.chars().any(|c| c.is_control() || c == ',' || c == '，')
+        {
+            return Err("每个标签应为 1–24 个字符，不能包含逗号或控制字符".into());
+        }
+        if !seen.insert(tag.to_lowercase()) {
+            return Err("标签不能重复".into());
+        }
+    }
+    Ok(())
 }
 
 fn validate_category(name: &str) -> Result<(), String> {
@@ -489,6 +546,7 @@ mod tests {
                 id,
                 content: Content::Text("x".repeat(512 * 1024)),
                 category: Some("收藏".into()),
+                tags: Vec::new(),
                 source: String::new(),
                 copied_at: 0,
             });
@@ -517,6 +575,7 @@ mod tests {
                         Some("收藏".into())
                     },
                     source: String::new(),
+                    tags: Vec::new(),
                     copied_at: 0,
                 })
                 .collect(),

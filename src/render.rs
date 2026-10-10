@@ -34,6 +34,14 @@ unsafe extern "system" {
     fn GdipCreatePen1(color: u32, width: f32, unit: i32, pen: *mut *mut c_void) -> i32;
     fn GdipDrawPath(graphics: *mut c_void, pen: *mut c_void, path: *mut c_void) -> i32;
     fn GdipDeletePen(pen: *mut c_void) -> i32;
+    fn GdipDrawLine(
+        graphics: *mut c_void,
+        pen: *mut c_void,
+        x1: f32,
+        y1: f32,
+        x2: f32,
+        y2: f32,
+    ) -> i32;
     fn GdipFlush(graphics: *mut c_void, intention: i32) -> i32;
 }
 pub(super) fn start_graphics() -> Result<usize, String> {
@@ -62,6 +70,108 @@ struct Painter {
     scale: f32,
 }
 impl Painter {
+    fn line(&self, x1: i32, y1: i32, x2: i32, y2: i32, color: u32) {
+        if self.g.is_null() {
+            return;
+        }
+        // SAFETY: pen is local to this draw, and the graphics handle is owned by Painter.
+        unsafe {
+            let mut pen = null_mut();
+            if GdipCreatePen1(0xff000000 | color, 1.4 * self.scale, 2, &mut pen) == 0 {
+                GdipDrawLine(
+                    self.g,
+                    pen,
+                    x1 as f32 * self.scale,
+                    y1 as f32 * self.scale,
+                    x2 as f32 * self.scale,
+                    y2 as f32 * self.scale,
+                );
+                GdipDeletePen(pen);
+            }
+        }
+    }
+    fn type_icon(&self, kind: &str, x: i32, y: i32) {
+        let stroke = 0xFFFFFF;
+        let line = |a, b, c, d| self.line(x + a, y + b, x + c, y + d, stroke);
+        match kind {
+            "代码" => {
+                line(5, 3, 1, 8);
+                line(1, 8, 5, 13);
+                line(11, 3, 15, 8);
+                line(15, 8, 11, 13);
+                line(9, 2, 7, 14);
+            }
+            "链接" => {
+                self.round(
+                    Area {
+                        x,
+                        y: y + 4,
+                        w: 10,
+                        h: 8,
+                    },
+                    4,
+                    None,
+                    Some((stroke, 1.4)),
+                );
+                self.round(
+                    Area {
+                        x: x + 6,
+                        y: y + 4,
+                        w: 10,
+                        h: 8,
+                    },
+                    4,
+                    None,
+                    Some((stroke, 1.4)),
+                );
+                line(5, 8, 11, 8);
+            }
+            "图片" => {
+                self.round(
+                    Area {
+                        x,
+                        y: y + 1,
+                        w: 16,
+                        h: 14,
+                    },
+                    2,
+                    None,
+                    Some((stroke, 1.4)),
+                );
+                line(2, 12, 6, 8);
+                line(6, 8, 9, 11);
+                line(9, 11, 12, 7);
+                line(12, 7, 14, 10);
+                self.round(
+                    Area {
+                        x: x + 3,
+                        y: y + 4,
+                        w: 2,
+                        h: 2,
+                    },
+                    1,
+                    Some(stroke),
+                    None,
+                );
+            }
+            _ => {
+                self.round(
+                    Area {
+                        x: x + 2,
+                        y,
+                        w: 12,
+                        h: 16,
+                    },
+                    2,
+                    None,
+                    Some((stroke, 1.4)),
+                );
+                for row in [4, 8, 12] {
+                    line(5, row, if row == 12 { 9 } else { 11 }, row);
+                }
+            }
+        }
+    }
     fn new(dc: HDC, scale: f32) -> Self {
         let mut g = null_mut();
         // SAFETY: live paint DC; graphics is dropped before releasing DC.
@@ -132,6 +242,179 @@ fn lighter(c: u32) -> u32 {
 }
 
 impl App {
+    fn text_width(&self, dc: HDC, text: &str, font: usize) -> i32 {
+        let utf16 = wide(text);
+        // SAFETY: live DC/font and initialized output; restore previous selection.
+        unsafe {
+            let previous = SelectObject(dc, self.fonts[font]);
+            let mut size: SIZE = zeroed();
+            GetTextExtentPoint32W(dc, utf16.as_ptr(), (utf16.len() - 1) as i32, &mut size);
+            SelectObject(dc, previous);
+            (size.cx as f32 / self.scale).ceil() as i32
+        }
+    }
+    fn draw_card_tags(
+        &mut self,
+        p: &Painter,
+        dc: HDC,
+        position: (i32, i32),
+        kind: &str,
+        tags: &[String],
+        accent: u32,
+    ) {
+        let (x, y) = position;
+        if x + 36 >= self.width {
+            return;
+        }
+        p.type_icon(kind, x + 16, y + 53);
+        self.tips.push((
+            Area {
+                x: x + 12,
+                y: y + 48,
+                w: 24,
+                h: 26,
+            },
+            kind.into(),
+        ));
+        let start = x + 42;
+        let end = (x + CARD_W - 14).min(self.width - 12);
+        let mut cursor = start;
+        for (i, tag) in tags.iter().enumerate() {
+            let remainder = tags.len() - i - 1;
+            let reserve = if remainder > 0 { 32 } else { 0 };
+            let wanted = self.text_width(dc, tag, 3) + 16;
+            let available = end - cursor - reserve;
+            if available < 28 || (i > 0 && wanted > available) {
+                break;
+            }
+            let width = wanted.min(available);
+            let badge = Area {
+                x: cursor,
+                y: y + 49,
+                w: width,
+                h: 23,
+            };
+            p.round(badge, 6, Some(lighter(accent)), None);
+            self.label(
+                dc,
+                tag,
+                Area {
+                    x: cursor + 8,
+                    y: y + 52,
+                    w: width - 16,
+                    h: 17,
+                },
+                0xFFFFFF,
+                3,
+                DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX,
+            );
+            cursor += width + 6;
+            // Reserve the final badge until every remaining tag is known to fit.
+            let remaining_width: i32 = tags[i + 1..]
+                .iter()
+                .map(|t| self.text_width(dc, t, 3) + 22)
+                .sum();
+            if remainder > 0 && remaining_width - 6 > end - cursor {
+                let overflow = format!("+{remainder}");
+                let a = Area {
+                    x: cursor,
+                    y: y + 49,
+                    w: 26,
+                    h: 23,
+                };
+                p.round(a, 6, Some(lighter(accent)), None);
+                self.label(
+                    dc,
+                    &overflow,
+                    Area {
+                        y: y + 52,
+                        h: 17,
+                        ..a
+                    },
+                    0xFFFFFF,
+                    3,
+                    DT_SINGLELINE | DT_CENTER,
+                );
+                break;
+            }
+        }
+        if !tags.is_empty() && end > start {
+            self.tips.push((
+                Area {
+                    x: start,
+                    y: y + 48,
+                    w: end - start,
+                    h: 26,
+                },
+                tags.join("\n"),
+            ));
+        }
+    }
+    fn draw_tooltip(&self, p: &Painter, dc: HDC) {
+        if self.dialog != Dialog::None || self.popup.is_some() || self.dragging {
+            return;
+        }
+        let Some((mx, my)) = self.tip_point else {
+            return;
+        };
+        let Some((anchor, text)) = self.tips.iter().find(|(area, _)| area.contains(mx, my)) else {
+            return;
+        };
+        let width = self
+            .text_width(
+                dc,
+                text.lines()
+                    .max_by_key(|s| s.chars().count())
+                    .unwrap_or(text),
+                3,
+            )
+            .clamp(32, (self.width - 48).min(320))
+            + 24;
+        let mut bounds = self.rect(Area {
+            x: 0,
+            y: 0,
+            w: width - 24,
+            h: 0,
+        });
+        // SAFETY: calculation only on a live DC; the selected font is restored.
+        unsafe {
+            let previous = SelectObject(dc, self.fonts[3]);
+            DrawTextW(
+                dc,
+                wide(text).as_ptr(),
+                -1,
+                &mut bounds,
+                DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX,
+            );
+            SelectObject(dc, previous);
+        }
+        let height = ((bounds.bottom - bounds.top) as f32 / self.scale).ceil() as i32 + 18;
+        let area = Area {
+            x: anchor.x.clamp(12, self.width - width - 12),
+            y: (anchor.y + anchor.h + 6).min(PANEL_H - height - 12),
+            w: width,
+            h: height,
+        };
+        p.round(
+            area,
+            7,
+            Some(self.palette.surface),
+            Some((self.palette.border, 1.)),
+        );
+        self.label(
+            dc,
+            text,
+            Area {
+                x: area.x + 12,
+                y: area.y + 9,
+                w: area.w - 24,
+                h: area.h - 18,
+            },
+            self.palette.text,
+            3,
+            DT_WORDBREAK | DT_NOPREFIX,
+        );
+    }
     fn label(&self, dc: HDC, text: &str, a: Area, c: u32, font: usize, flags: u32) {
         // SAFETY: live memory DC and valid font handle; selection is restored.
         unsafe {
@@ -594,19 +877,7 @@ impl App {
                 0,
                 DT_SINGLELINE | DT_END_ELLIPSIS,
             );
-            self.label(
-                dc,
-                kind,
-                Area {
-                    x: x + 15,
-                    y: y + 48,
-                    w: 140,
-                    h: 27,
-                },
-                0xFFFFFF,
-                2,
-                DT_SINGLELINE,
-            );
+            self.draw_card_tags(p, dc, (x, y), kind, &item.tags, accent);
             self.label(
                 dc,
                 &format!("Ctrl+{}", n + 1),
@@ -755,9 +1026,17 @@ impl App {
     }
     fn draw_dialog(&mut self, p: &Painter, dc: HDC) {
         self.hits.clear();
+        if matches!(self.dialog, Dialog::Sync | Dialog::SyncConflict(..)) {
+            self.draw_sync(p, dc);
+            return;
+        }
         let x = (self.width - 520) / 2;
         if let Dialog::NewItem(category) = self.dialog.clone() {
             self.draw_new_item(p, dc, &category);
+            return;
+        }
+        if matches!(self.dialog, Dialog::EditTags(_)) {
+            self.draw_tag_editor(p, dc);
             return;
         }
         if self.dialog == Dialog::Settings {
@@ -1013,9 +1292,33 @@ impl App {
                 x: x + 24,
                 y: 144,
                 w: width - 48,
-                h: 120,
+                h: 74,
             },
             8,
+            Some(self.palette.input),
+            Some((self.palette.border, 1.)),
+        );
+        self.label(
+            dc,
+            "标签（可选，用逗号分隔）",
+            Area {
+                x: x + 26,
+                y: 220,
+                w: width - 52,
+                h: 18,
+            },
+            self.palette.muted,
+            3,
+            DT_SINGLELINE,
+        );
+        p.round(
+            Area {
+                x: x + 24,
+                y: 240,
+                w: width - 48,
+                h: 34,
+            },
+            7,
             Some(self.palette.input),
             Some((self.palette.border, 1.)),
         );
@@ -1058,6 +1361,109 @@ impl App {
         );
         self.hits.push((save, Hit::Accept));
     }
+    fn draw_tag_editor(&mut self, p: &Painter, dc: HDC) {
+        let width = (self.width - 48).min(720);
+        let x = (self.width - width) / 2;
+        p.round(
+            Area {
+                x,
+                y: 78,
+                w: width,
+                h: 226,
+            },
+            16,
+            Some(self.palette.surface),
+            Some((self.palette.border, 0.6)),
+        );
+        self.label(
+            dc,
+            "编辑标签",
+            Area {
+                x: x + 24,
+                y: 96,
+                w: width - 48,
+                h: 30,
+            },
+            self.palette.text,
+            2,
+            DT_SINGLELINE,
+        );
+        self.label(
+            dc,
+            "用逗号分隔，最多 8 个，每个不超过 24 个字",
+            Area {
+                x: x + 26,
+                y: 136,
+                w: width - 52,
+                h: 22,
+            },
+            self.palette.muted,
+            0,
+            DT_SINGLELINE | DT_END_ELLIPSIS,
+        );
+        p.round(
+            Area {
+                x: x + 24,
+                y: 166,
+                w: width - 48,
+                h: 40,
+            },
+            8,
+            Some(self.palette.input),
+            Some((self.palette.border, 1.)),
+        );
+        self.label(
+            dc,
+            "留空可移除全部标签 · Enter 保存",
+            Area {
+                x: x + 26,
+                y: 216,
+                w: width - 52,
+                h: 20,
+            },
+            self.palette.muted,
+            3,
+            DT_SINGLELINE,
+        );
+        self.badge(
+            p,
+            dc,
+            Area {
+                x: x + width - 234,
+                y: 252,
+                w: 88,
+                h: 34,
+            },
+            "取消",
+            Hit::Cancel,
+            false,
+        );
+        let save = Area {
+            x: x + width - 130,
+            y: 252,
+            w: 106,
+            h: 34,
+        };
+        p.round(
+            save,
+            8,
+            Some(self.palette.selected),
+            Some((self.palette.accent, 0.8)),
+        );
+        self.label(
+            dc,
+            "保存标签",
+            Area {
+                y: save.y + 6,
+                h: 24,
+                ..save
+            },
+            self.palette.text,
+            0,
+            DT_SINGLELINE | DT_CENTER,
+        );
+        self.hits.push((save, Hit::Accept));
+    }
     fn draw_settings(&mut self, p: &Painter, dc: HDC, x: i32) {
         p.round(
             Area {
@@ -1080,6 +1486,19 @@ impl App {
             16,
             Some(self.palette.surface),
             Some((self.palette.border, 0.6)),
+        );
+        self.badge(
+            p,
+            dc,
+            Area {
+                x: x + 268,
+                y: 72,
+                w: 158,
+                h: 28,
+            },
+            "iCloud Drive 同步",
+            Hit::Sync(SyncAction::Open),
+            false,
         );
         self.label(
             dc,
@@ -1304,6 +1723,305 @@ impl App {
             DT_SINGLELINE,
         );
     }
+    fn draw_sync(&mut self, p: &Painter, dc: HDC) {
+        let width = (self.width - 48).min(720);
+        let x = (self.width - width) / 2;
+        p.round(
+            Area {
+                x,
+                y: 65,
+                w: width,
+                h: 267,
+            },
+            14,
+            Some(self.palette.surface),
+            Some((self.palette.border, 0.8)),
+        );
+        self.label(
+            dc,
+            "iCloud Drive 加密同步",
+            Area {
+                x: x + 20,
+                y: 78,
+                w: width - 40,
+                h: 28,
+            },
+            self.palette.text,
+            2,
+            DT_SINGLELINE,
+        );
+        if let Dialog::SyncConflict(entity, index) = &self.dialog {
+            let can_both = entity.starts_with("item:");
+            let heads = self.model.sync.heads(entity);
+            if let Some(op) = heads.get(*index % heads.len().max(1)) {
+                if let pasteleaf::sync::Value::Record(pasteleaf::sync::Record {
+                    content: Content::Image { file, .. },
+                    ..
+                }) = &op.value
+                {
+                    if let Ok(image) = self.store.read_image(file) {
+                        let mut thumb = image::imageops::thumbnail(
+                            &image,
+                            self.px(width / 2 - 36) as u32,
+                            self.px(136) as u32,
+                        );
+                        for pixel in thumb.pixels_mut() {
+                            pixel.0.swap(0, 2);
+                        }
+                        draw_bitmap(
+                            dc,
+                            &thumb,
+                            self.px(x + width / 2 + 12),
+                            self.px(130),
+                            thumb.width() as i32,
+                            thumb.height() as i32,
+                        );
+                    }
+                }
+            }
+            self.label(
+                dc,
+                "查看每个版本后选择保留；正文和标签按版本一起保留",
+                Area {
+                    x: x + 20,
+                    y: 101,
+                    w: width - 40,
+                    h: 20,
+                },
+                self.palette.muted,
+                3,
+                DT_SINGLELINE | DT_END_ELLIPSIS,
+            );
+            for (i, (text, action)) in [
+                ("下一版本", SyncAction::NextVersion),
+                ("保留此版", SyncAction::Keep),
+                (
+                    if can_both {
+                        "两版都留"
+                    } else {
+                        "返回设置"
+                    },
+                    if can_both {
+                        SyncAction::KeepBoth
+                    } else {
+                        SyncAction::Open
+                    },
+                ),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                self.badge(
+                    p,
+                    dc,
+                    Area {
+                        x: x + 20 + i as i32 * ((width - 48) / 3),
+                        y: 280,
+                        w: (width - 60) / 3,
+                        h: 32,
+                    },
+                    text,
+                    Hit::Sync(action),
+                    false,
+                );
+            }
+            self.badge(
+                p,
+                dc,
+                Area {
+                    x: x + width - 90,
+                    y: 75,
+                    w: 70,
+                    h: 27,
+                },
+                "返回",
+                Hit::Sync(SyncAction::Open),
+                false,
+            );
+            return;
+        }
+        let connected = self.model.sync.config.is_some();
+        self.label(
+            dc,
+            "专用同步文件夹",
+            Area {
+                x: x + 24,
+                y: 106,
+                w: width - 48,
+                h: 18,
+            },
+            self.palette.muted,
+            3,
+            DT_SINGLELINE,
+        );
+        p.round(
+            Area {
+                x: x + 20,
+                y: 121,
+                w: width - 130,
+                h: 30,
+            },
+            6,
+            Some(self.palette.input),
+            Some((self.palette.border, 0.8)),
+        );
+        self.badge(
+            p,
+            dc,
+            Area {
+                x: x + width - 102,
+                y: 121,
+                w: 80,
+                h: 30,
+            },
+            "选择…",
+            Hit::Sync(SyncAction::Browse),
+            false,
+        );
+        for (offset, title) in [
+            (24, "同步密码（至少 12 个字符）"),
+            (width / 2 + 7, "确认密码（创建时填写）"),
+        ] {
+            self.label(
+                dc,
+                title,
+                Area {
+                    x: x + offset,
+                    y: 157,
+                    w: (width - 62) / 2,
+                    h: 18,
+                },
+                self.palette.muted,
+                3,
+                DT_SINGLELINE | DT_END_ELLIPSIS,
+            );
+            p.round(
+                Area {
+                    x: x + offset - 4,
+                    y: 175,
+                    w: (width - 62) / 2 + 8,
+                    h: 30,
+                },
+                6,
+                Some(self.palette.input),
+                Some((self.palette.border, 0.8)),
+            );
+        }
+        self.badge(
+            p,
+            dc,
+            Area {
+                x: x + 20,
+                y: 214,
+                w: (width - 48) / 2,
+                h: 28,
+            },
+            if self.sync_runtime.all {
+                "范围：全部记录"
+            } else {
+                "范围：仅收藏"
+            },
+            Hit::Sync(SyncAction::Scope),
+            self.sync_runtime.all,
+        );
+        self.badge(
+            p,
+            dc,
+            Area {
+                x: x + width / 2 + 4,
+                y: 214,
+                w: (width - 48) / 2,
+                h: 28,
+            },
+            if self.sync_runtime.remember {
+                "记住本机密钥：开"
+            } else {
+                "记住本机密钥：关"
+            },
+            Hit::Sync(SyncAction::Remember),
+            self.sync_runtime.remember,
+        );
+        let actions = if connected {
+            vec![
+                ("解锁", SyncAction::Unlock),
+                ("立即同步", SyncAction::Now),
+                (
+                    if self.model.sync.config.as_ref().is_some_and(|c| c.paused) {
+                        "恢复"
+                    } else {
+                        "暂停"
+                    },
+                    SyncAction::Pause,
+                ),
+                ("冲突", SyncAction::Conflicts),
+                ("断开", SyncAction::Disconnect),
+            ]
+        } else {
+            vec![
+                ("创建并启用", SyncAction::Create),
+                ("加入并启用", SyncAction::Join),
+            ]
+        };
+        let count = actions.len() as i32;
+        let step = (width - 40) / count;
+        for (i, (title, action)) in actions.into_iter().enumerate() {
+            self.badge(
+                p,
+                dc,
+                Area {
+                    x: x + 20 + i as i32 * step,
+                    y: 250,
+                    w: step - 5,
+                    h: 30,
+                },
+                title,
+                Hit::Sync(action),
+                false,
+            );
+        }
+        let status = if !connected {
+            "未启用 · 仅同步文件加密，本地记录保持原样".to_string()
+        } else if self.model.sync.config.as_ref().is_some_and(|c| c.paused) {
+            "已暂停".into()
+        } else if self.sync_runtime.key.is_none() {
+            "等待解锁 · 本地记录仍可使用".into()
+        } else {
+            self.sync_runtime.status.clone()
+        };
+        let status = if let Some(last) = self.sync_runtime.last {
+            format!("{status} · {} 秒前", timestamp().saturating_sub(last))
+        } else {
+            status
+        };
+        let area = Area {
+            x: x + 20,
+            y: 292,
+            w: width - 40,
+            h: 25,
+        };
+        self.label(
+            dc,
+            &status,
+            area,
+            self.palette.muted,
+            3,
+            DT_SINGLELINE | DT_END_ELLIPSIS,
+        );
+        self.tips.push((area, status));
+        self.badge(
+            p,
+            dc,
+            Area {
+                x: x + width - 76,
+                y: 77,
+                w: 56,
+                h: 25,
+            },
+            "关闭",
+            Hit::Cancel,
+            false,
+        );
+    }
     pub(super) fn paint_popup(&self) {
         let Some(menu) = self.popup.as_ref() else {
             return;
@@ -1466,6 +2184,98 @@ impl App {
             EndPaint(self.popup_hwnd, &ps);
         }
     }
+    pub(super) fn draw_content(&mut self, mem: HDC) {
+        // SAFETY: caller supplies a live paint or compatible memory DC.
+        unsafe {
+            let bounds = self.rect(Area {
+                x: 0,
+                y: 0,
+                w: self.width,
+                h: PANEL_H,
+            });
+            let brush = CreateSolidBrush(colorref(self.palette.background));
+            FillRect(mem, &bounds, brush);
+            DeleteObject(brush);
+        }
+        {
+            let p = Painter::new(mem, self.scale);
+            self.hits.clear();
+            self.tips.clear();
+            self.draw_header(&p, mem);
+            if self.dialog == Dialog::None {
+                self.draw_cards(&p, mem);
+            } else {
+                self.draw_dialog(&p, mem);
+            }
+            let status = if !self.status.is_empty() {
+                self.status.clone()
+            } else if self.model.paused {
+                "●  已暂停记录".into()
+            } else {
+                format!("{} 条内容", self.visible.len())
+            };
+            self.label(
+                mem,
+                &status,
+                Area {
+                    x: 24,
+                    y: 346,
+                    w: if self.dialog == Dialog::None {
+                        (self.width - 450).max(150)
+                    } else {
+                        self.width - 48
+                    },
+                    h: 19,
+                },
+                self.palette.muted,
+                3,
+                DT_SINGLELINE | DT_END_ELLIPSIS,
+            );
+            if self.dialog == Dialog::None {
+                self.label(
+                    mem,
+                    "← → 选择     ↵ 粘贴     Space 预览",
+                    Area {
+                        x: self.width - 395,
+                        y: 346,
+                        w: 300,
+                        h: 19,
+                    },
+                    self.palette.muted,
+                    3,
+                    DT_SINGLELINE | DT_RIGHT,
+                );
+                self.badge(
+                    &p,
+                    mem,
+                    Area {
+                        x: self.width - 78,
+                        y: 338,
+                        w: 27,
+                        h: 26,
+                    },
+                    "‹",
+                    Hit::Previous,
+                    false,
+                );
+                self.badge(
+                    &p,
+                    mem,
+                    Area {
+                        x: self.width - 45,
+                        y: 338,
+                        w: 27,
+                        h: 26,
+                    },
+                    "›",
+                    Hit::Next,
+                    false,
+                );
+            }
+        }
+        let p = Painter::new(mem, self.scale);
+        self.draw_tooltip(&p, mem);
+    }
     pub(super) fn paint(&mut self) {
         // SAFETY: Begin/EndPaint and memory DC/bitmap lifetimes are paired. Fonts
         // and bitmaps are restored before their owning objects are destroyed.
@@ -1490,77 +2300,7 @@ impl App {
             let bg = CreateSolidBrush(colorref(self.palette.background));
             FillRect(mem, &bounds, bg);
             DeleteObject(bg);
-            {
-                let p = Painter::new(mem, self.scale);
-                self.hits.clear();
-                self.draw_header(&p, mem);
-                if self.dialog == Dialog::None {
-                    self.draw_cards(&p, mem);
-                } else {
-                    self.draw_dialog(&p, mem);
-                }
-                let status = if !self.status.is_empty() {
-                    self.status.clone()
-                } else if self.model.paused {
-                    "●  已暂停记录".into()
-                } else {
-                    format!("{} 条内容", self.visible.len())
-                };
-                self.label(
-                    mem,
-                    &status,
-                    Area {
-                        x: 24,
-                        y: 346,
-                        w: (self.width - 450).max(150),
-                        h: 19,
-                    },
-                    self.palette.muted,
-                    3,
-                    DT_SINGLELINE | DT_END_ELLIPSIS,
-                );
-                if self.dialog == Dialog::None {
-                    self.label(
-                        mem,
-                        "← → 选择     ↵ 粘贴     Space 预览",
-                        Area {
-                            x: self.width - 395,
-                            y: 346,
-                            w: 300,
-                            h: 19,
-                        },
-                        self.palette.muted,
-                        3,
-                        DT_SINGLELINE | DT_RIGHT,
-                    );
-                    self.badge(
-                        &p,
-                        mem,
-                        Area {
-                            x: self.width - 78,
-                            y: 338,
-                            w: 27,
-                            h: 26,
-                        },
-                        "‹",
-                        Hit::Previous,
-                        false,
-                    );
-                    self.badge(
-                        &p,
-                        mem,
-                        Area {
-                            x: self.width - 45,
-                            y: 338,
-                            w: 27,
-                            h: 26,
-                        },
-                        "›",
-                        Hit::Next,
-                        false,
-                    );
-                }
-            }
+            self.draw_content(mem);
             BitBlt(dc, 0, 0, bounds.right, bounds.bottom, mem, 0, 0, SRCCOPY);
             SelectObject(mem, old);
             DeleteObject(bitmap);

@@ -20,7 +20,7 @@ impl Store {
         match fs::metadata(&path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Model::default()),
             Err(e) => return Err(e.to_string()),
-            Ok(m) if m.len() > 70 * 1024 * 1024 => return Err("数据文件过大；原文件未改动".into()),
+            Ok(m) if m.len() > 256 * 1024 * 1024 => return Err("数据文件过大；原文件未改动".into()),
             _ => {}
         }
         let bytes = fs::read(path).map_err(|e| e.to_string())?;
@@ -32,8 +32,13 @@ impl Store {
     pub fn save(&self, model: &Model) -> Result<(), String> {
         model.validate()?;
         let bytes = serde_json::to_vec(model).map_err(|e| e.to_string())?;
-        if bytes.len() > 70 * 1024 * 1024 {
-            return Err("序列化后数据超过 70 MiB；原文件未改动".into());
+        let limit = if model.sync.operations.is_empty() {
+            70
+        } else {
+            256
+        };
+        if bytes.len() > limit * 1024 * 1024 {
+            return Err(format!("序列化后数据超过 {limit} MiB；原文件未改动"));
         }
         let temp = self.root.join("library.json.tmp");
         let mut file = File::create(&temp).map_err(|e| format!("无法保存数据：{e}"))?;
@@ -44,7 +49,15 @@ impl Store {
         let current = self.root.join("library.json");
         // Keep the last validated snapshot before replacing the current library.
         if let Ok(previous) = fs::read(&current) {
-            if serde_json::from_slice::<Model>(&previous).is_ok_and(|m| m.validate().is_ok()) {
+            if let Ok(mut snapshot) = serde_json::from_slice::<Model>(&previous) {
+                if snapshot.validate().is_err() {
+                    return Err("当前数据校验失败，原文件未改动".into());
+                }
+                // A rollback must not restore a key the user chose to forget.
+                if let Some(config) = &mut snapshot.sync.config {
+                    config.remembered_key.clear();
+                }
+                let previous = serde_json::to_vec(&snapshot).map_err(|e| e.to_string())?;
                 let backup = self.root.join("library.previous.tmp");
                 let mut file =
                     File::create(&backup).map_err(|e| format!("无法创建数据备份：{e}"))?;
@@ -128,9 +141,11 @@ impl Store {
                 }
             })
             .collect();
+        used.extend(model.sync.image_files());
         if let Ok(bytes) = fs::read(self.root.join("library.previous.json")) {
             if let Ok(previous) = serde_json::from_slice::<Model>(&bytes) {
                 if previous.validate().is_ok() {
+                    used.extend(previous.sync.image_files());
                     used.extend(
                         previous
                             .items
