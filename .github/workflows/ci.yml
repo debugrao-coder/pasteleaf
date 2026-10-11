@@ -48,13 +48,13 @@ jobs:
         run: cargo fetch --locked
 
       - name: Check Clippy
-        run: cargo clippy --locked --all-targets -- -D warnings
+        run: cargo clippy -p pasteleaf --locked --all-targets -- -D warnings
 
       - name: Run all tests serially
-        run: cargo test --locked --release --all-targets -- --test-threads=1
+        run: cargo test -p pasteleaf --locked --release --all-targets -- --test-threads=1
 
       - name: Build release executable
-        run: cargo build --locked --release --bin pasteleaf
+        run: cargo build -p pasteleaf --locked --release --bin pasteleaf
 
       - name: Test package integrity checks
         run: python -m unittest discover -s scripts -p test_package.py -v

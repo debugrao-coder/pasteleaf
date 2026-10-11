@@ -1,5 +1,11 @@
 # PasteLeaf
 
+> **v2 工程预览**：原生 macOS、重构后的 Windows 客户端、SQLite 永久历史和 v2 加密同步已在此分支实现。构建入口见 [Native v2 开发](docs/V2-DEVELOPMENT.md)，具体通过项与缺口见 [验收记录](docs/V2-VERIFICATION.md)，共享视觉契约见 [DESIGN.md](DESIGN.md)。真实 Windows 运行与 Mac ↔ Windows iCloud 往返未验收前，不视为 Paste 的完整替代。旧数据和旧同步库不自动升级。
+
+## v1 Windows 使用说明
+
+以下说明适用于保留的 v1 客户端；构建旧版时为 Cargo 命令加 `-p pasteleaf`，不要与 v2 数据格式混用。
+
 [![Windows CI](https://github.com/debugrao-coder/pasteleaf/actions/workflows/ci.yml/badge.svg)](https://github.com/debugrao-coder/pasteleaf/actions/workflows/ci.yml)
 
 Windows 10/11 x64 剪贴板历史与收藏工具，使用 Rust、原生 Win32 和 GDI+，无需浏览器运行时。

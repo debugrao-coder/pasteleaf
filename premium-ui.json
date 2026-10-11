@@ -1,0 +1,18 @@
+{
+  "profile": "product-admin",
+  "sourceRoots": ["clients/macos/Sources", "clients/windows/src"],
+  "locale": "zh-CN",
+  "canonicalMap": "UX-CONTRACT.md",
+  "requiredCapabilities": ["Table Selection", "Select/Listbox", "Form", "Scrollbar", "Toast", "CRUD"],
+  "ownership": {"Select/Listbox": "native"},
+  "requiredCommands": ["tokens", "unit", "model"],
+  "commands": {
+    "tokens": "python3 scripts/generate_design_tokens.py --check",
+    "unit": "cargo test -p pasteleaf-core --locked --release --all-targets -- --test-threads=1",
+    "model": "cargo test -p pasteleaf-windows --locked --release"
+  },
+  "evidence": {
+    "crudFullFlow": "crates/pasteleaf-core/tests/core_v2.rs",
+    "failurePaths": "scripts/test_v2_abi.py"
+  }
+}

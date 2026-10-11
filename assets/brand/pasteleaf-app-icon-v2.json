@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "name": "PasteLeaf",
+  "concept": "叠页成叶",
+  "created": "2026-10-12",
+  "generation": {
+    "tool": "built-in image_gen",
+    "prompt": "Use case: logo-brand / stylized-concept.\nCreate ONE finished premium desktop application icon for PasteLeaf, an independent native clipboard manager. Brand concept: \"stacked pages become a leaf\" — collecting and recalling ideas, not a gardening app.\nOutput: square 1:1, ideally 1024 x 1024 or larger, one icon only, centered, perfectly front-facing orthographic view. Genuine transparent alpha outside the app tile, no surrounding scenery or presentation board.\nDesign: a softly rounded macOS-style squircle tile occupying about 88% of the canvas. The tile is softly luminous porcelain-white with a very subtle mint cast, a precision satin-glass rim and gentle dimensional depth. On the tile, one bold, memorable emerald-green emblem: two overlapping softly rounded clipboard/content cards, with the foremost card sculpted into a single elegant leaf-shaped folded sheet. The upward-right leaf tip and a single broad, graceful negative-space crease should read immediately. The small rear sheet is offset slightly up-left, clearly suggesting copy/history. Integrate the papers and leaf into ONE coherent symbol rather than placing unrelated icons together. Keep the silhouette balanced, compact and optically centered, covering roughly 64% of tile width.\nMaterials and light: restrained tactile layered glass and enamel, rich forest/emerald-green body, small mint highlights, subtle refraction at edges, soft top-left illumination, delicate contact shadow. Sophisticated native desktop icon craftsmanship. Main silhouette remains high contrast and legible at 32 pixels; broad surfaces, no fine details or noise.\nConstraints: no text, no letters, no wordmark, no Apple logo, no Paste logo, no clipboard clip or tiny UI lines, no extra badges, no cloud, no gradients outside the tile, no neon, no sparkles, no busy mesh, no hard metallic reflections. Clean alpha edges with a very subtle compact shadow only; do not fill the transparent corners with checkerboard pixels. Not an icon grid or multiple variants.",
+    "model": "tool-managed",
+    "refinement_prompt": "Refine this exact PasteLeaf app icon for production. Preserve the centered squircle, white-mint satin glass tile, emerald stacked-card leaf emblem, proportions, colors and beautiful interior lighting. Change ONLY the exterior alpha boundary: eliminate every stray white fleck, ragged fringe, speckle and irregular glow outside the rounded-square tile, especially above the top edge. Remove the exterior drop shadow entirely. The entire area outside the single clean squircle must be truly 100% transparent, with only a smooth one-pixel antialiased boundary. No floating pixels, no texture in transparent space, no outline artifacts. Keep the tile interior and green symbol as they are. Output a single square transparent app icon with the same margins; no text, no checkerboard, no redesign."
+  },
+  "master": "pasteleaf-app-icon-v2-master.png",
+  "distribution": {
+    "png": "pasteleaf-app-icon-v2.png",
+    "macos": "pasteleaf-app-icon-v2.icns",
+    "windows": "pasteleaf-app-icon-v2.ico"
+  },
+  "transformation": "Format packaging and size resampling only; master artwork and alpha are preserved.",
+  "generator": "clients/macos/Resources/GenerateIcon.swift",
+  "sha256": {
+    "pasteleaf-app-icon-v2-master.png": "2aa3981fad0e20b7f885f0b6eaa95cad43c17bc24aa88d468a260273e110bbd0",
+    "pasteleaf-app-icon-v2.icns": "74a2d1f4f441396c03fe71b52ab65df03adc300224e8f6a05cfd0b994012441e",
+    "pasteleaf-app-icon-v2.ico": "ef42036905202f7cbb3c30292995c8105cccec04a036415312793b058c0b973d",
+    "pasteleaf-app-icon-v2.png": "006df7327f15cff789ec37fb7951bf5d90844886472a5498d2e429019f493ce2"
+  }
+}

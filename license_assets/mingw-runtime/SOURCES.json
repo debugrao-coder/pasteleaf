@@ -1,0 +1,18 @@
+{
+  "mingw-w64-COPYING": {
+    "sha256": "99a69660981156c21336fdb5661f89341b013c94e4bf9e1c7467b4745718397f",
+    "source": "Homebrew core mingw-w64 14.0.0_3 installed vendor notices"
+  },
+  "mingw-w64-AUTHORS": {
+    "sha256": "8f308316e7a94b8410f871868bd3948f126526dc1775aeee97a0e365f9a0fd9f",
+    "source": "Homebrew core mingw-w64 14.0.0_3 installed vendor notices"
+  },
+  "GCC-Runtime-Library-Exception-3.1.txt": {
+    "source": "https://raw.githubusercontent.com/gcc-mirror/gcc/master/COPYING.RUNTIME",
+    "sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74"
+  },
+  "GPL-3.0.txt": {
+    "source": "https://raw.githubusercontent.com/gcc-mirror/gcc/master/COPYING3",
+    "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+  }
+}

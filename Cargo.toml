@@ -1,3 +1,8 @@
+[workspace]
+members = [".", "crates/pasteleaf-core", "clients/windows"]
+default-members = ["crates/pasteleaf-core"]
+resolver = "2"
+
 [package]
 name = "pasteleaf"
 version = "0.1.0"
@@ -26,4 +31,4 @@ opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
-panic = "abort"
+panic = "unwind"

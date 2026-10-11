@@ -1,0 +1,35 @@
+{
+  "status": "PASS_SCOPED",
+  "verified_date": "2026-10-11",
+  "scope": "Shared Rust core warm SQLite history list/search queries; not native panel presentation or real iCloud transport",
+  "hardware": {"architecture": "arm64", "cpu": "Apple M1 Max", "memory_bytes": 68719476736},
+  "build": {"profile": "release", "rustc": "1.99.0 (b940084d7 2026-09-28)"},
+  "command": "cargo test -p pasteleaf-core --release --lib benchmark_100k_indexed_history -- --ignored --nocapture",
+  "fixture": {
+    "record_count": 100000,
+    "content": "设计评审 项目交付 Clipboard fixture NNNNNN",
+    "tags": ["任务N where N = index % 100", "研发"],
+    "source_apps": ["com.example.editor", "com.example.browser"],
+    "seeding": "one SQLite transaction through production record/FTS/short-token indexing; synthetic data only",
+    "seed_ms": 42539,
+    "queries_per_case": 20,
+    "page_size": 100,
+    "p95_definition": "19th ordered duration among 20 samples",
+    "threshold_ms": 200
+  },
+  "measurements": [
+    {"query": "", "p95_ms": 20.86},
+    {"query": "设计", "p95_ms": 169.22},
+    {"query": "设计评审", "p95_ms": 149.69},
+    {"query": "001337", "p95_ms": 0.66},
+    {"query": "任务23", "p95_ms": 5.00},
+    {"query": "研", "p95_ms": 168.10}
+  ],
+  "test_elapsed_seconds": 52.40,
+  "limits": [
+    "Measures permanent-history storage/query path, not 100000 cloud operation publication.",
+    "Native macOS/Windows warm-panel p95 requires separate UI measurement.",
+    "Windows performance and real macOS-Windows iCloud transfer remain unverified.",
+    "Core operation/attachment sync tests use isolated local synthetic folders, not real iCloud."
+  ]
+}
