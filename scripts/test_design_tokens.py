@@ -8,13 +8,13 @@ import generate_design_tokens as g
 class TokensTests(unittest.TestCase):
     def test_generated_adapters_match_source(self):
         for name, value in g.generated().items():
-            self.assertEqual((g.ROOT/name).read_text(), value, name)
+            self.assertEqual((g.ROOT/name).read_text(encoding='utf-8'), value, name)
     def test_text_contrast(self):
         def lum(s):
             v=[int(s[i:i+2],16)/255 for i in (0,2,4)]
             v=[x/12.92 if x<=.04045 else ((x+.055)/1.055)**2.4 for x in v]
             return sum(a*b for a,b in zip(v,[.2126,.7152,.0722]))
-        t=json.loads((g.ROOT/'design/tokens.json').read_text())
+        t=json.loads((g.ROOT/'design/tokens.json').read_text(encoding='utf-8'))
         for name in ('light','dark'):
             p=t[name]
             for fg in ('text','muted'):
@@ -24,14 +24,14 @@ class TokensTests(unittest.TestCase):
             a,b=sorted((lum(p['accent_text']),lum(p['accent'])))
             self.assertGreaterEqual((b+.05)/(a+.05),4.5)
     def test_geometry_and_palette_symmetry(self):
-        t=json.loads((g.ROOT/'design/tokens.json').read_text())
+        t=json.loads((g.ROOT/'design/tokens.json').read_text(encoding='utf-8'))
         self.assertEqual(t['light'].keys(),t['dark'].keys())
         for key,n in t['geometry'].items():
             if key!='motion_seconds': self.assertEqual(n%4,0)
         for opacity in t['states'].values(): self.assertTrue(0 < opacity <= 1)
         self.assertEqual(len(set(t['category_colors'])), len(t['category_colors']))
     def test_mac_native_roles_are_generated_not_a_private_hex_palette(self):
-        t=json.loads((g.ROOT/'design/tokens.json').read_text())
+        t=json.loads((g.ROOT/'design/tokens.json').read_text(encoding='utf-8'))
         mac=t['platforms']['macos']
         self.assertEqual(mac['accent'],'system')
         self.assertEqual(mac['navigation_material'],'liquidGlassWithAvailabilityFallback')
@@ -50,7 +50,7 @@ class TokensTests(unittest.TestCase):
         self.assertIn('pub const LIGHT: Palette',rust)
 
     def test_compact_shelf_content_fits_panel(self):
-        geometry=json.loads((g.ROOT/'design/tokens.json').read_text())['geometry']
+        geometry=json.loads((g.ROOT/'design/tokens.json').read_text(encoding='utf-8'))['geometry']
         rows=('panel_top_padding','header_height','header_gap','category_height',
               'category_gap','card_height','card_strip_extra','footer_height',
               'footer_gap','panel_bottom_padding')
@@ -61,7 +61,7 @@ class TokensTests(unittest.TestCase):
 
     def test_shared_app_artwork_is_versioned_and_alpha_preserving(self):
         brand=g.ROOT/'assets/brand'
-        manifest=json.loads((brand/'pasteleaf-app-icon-v2.json').read_text())
+        manifest=json.loads((brand/'pasteleaf-app-icon-v2.json').read_text(encoding='utf-8'))
         self.assertTrue(manifest['generation']['prompt'])
         for name,checksum in manifest['sha256'].items():
             self.assertEqual(Path(name).name,name)
@@ -100,6 +100,6 @@ class TokensTests(unittest.TestCase):
             types.append(kind);cursor+=length
         self.assertEqual(cursor,len(icns))
         self.assertIn(b'ic10',types,'1024-pixel Retina entry required')
-        self.assertIn('assets/brand/pasteleaf-app-icon-v2-master.png',(g.ROOT/'clients/macos/build.sh').read_text())
-        self.assertIn('assets/brand/pasteleaf-app-icon-v2.ico',(g.ROOT/'clients/windows/build.rs').read_text())
+        self.assertIn('assets/brand/pasteleaf-app-icon-v2-master.png',(g.ROOT/'clients/macos/build.sh').read_text(encoding='utf-8'))
+        self.assertIn('assets/brand/pasteleaf-app-icon-v2.ico',(g.ROOT/'clients/windows/build.rs').read_text(encoding='utf-8'))
 if __name__=='__main__': unittest.main()

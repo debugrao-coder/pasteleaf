@@ -9,7 +9,7 @@ spec.loader.exec_module(module)
 
 class SigningPlanTests(unittest.TestCase):
     def test_fingerprint_and_bundle_are_both_required(self):
-        mode, flags = module.signing_plan(module.PRODUCTION_ID, {'identity_sha1': 'a' * 40, 'keychain': '/synthetic/login.keychain-db'})
+        mode, flags = module.signing_plan(module.PRODUCTION_ID, {'identity_sha1': 'a' * 40, 'keychain': str(Path.cwd() / 'synthetic/login.keychain-db')})
         self.assertEqual(mode, 'local-certificate')
         requirement = flags[flags.index('--requirements') + 1]
         self.assertIn('identifier "io.pasteleaf.desktop.v2" and certificate leaf', requirement)

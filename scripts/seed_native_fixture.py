@@ -44,7 +44,7 @@ def main():
         paths = []
         for filename in ('跨端设计规范与页面验收清单-这是用于超长文件名换行验收的合成附件.md', 'Synthetic Notes.txt'):
             path = fixture_files / filename
-            path.write_text('Only synthetic attachment bytes. 中文文件往返校验。\n')
+            path.write_text('Only synthetic attachment bytes. 中文文件往返校验。\n', encoding='utf-8')
             paths.append(str(path))
         a.request('capture', kind='files', paths=paths, source='合成文件')
         a.request('capture', kind='rich_text', text='把复杂留在背后，把顺手放在眼前。\n合成富文本，安全预览不执行脚本。', html='<h2>安全预览</h2><p>合成内容</p><img src="https://invalid.test/no-request">', rtf=base64.b64encode(b'{\\rtf1\\ansi Synthetic rich text}').decode(), source='合成文稿')
@@ -58,7 +58,7 @@ def main():
         report = {'synthetic_only': True, 'library': str(root / 'library'),
                   'records': a.request('list', limit=1)['total'],
                   'conflicts': len(a.request('conflicts')['items'])}
-        (root / 'fixture.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n')
+        (root / 'fixture.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
         print(json.dumps(report, ensure_ascii=False, indent=2))
     finally:
         for core in handles:

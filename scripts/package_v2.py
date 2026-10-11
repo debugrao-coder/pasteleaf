@@ -53,7 +53,7 @@ def compiler_notices(directory, payload):
         raise ValueError('GNU preview requires reviewed compiler runtime licenses')
     required = {'mingw-w64-COPYING', 'mingw-w64-AUTHORS',
                 'GCC-Runtime-Library-Exception-3.1.txt', 'GPL-3.0.txt'}
-    sources = json.loads((directory / 'SOURCES.json').read_text())
+    sources = json.loads((directory / 'SOURCES.json').read_text(encoding='utf-8'))
     if not required.issubset(sources):
         raise ValueError('Compiler runtime license inventory is incomplete')
     for name, entry in sources.items():
