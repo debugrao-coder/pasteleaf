@@ -35,6 +35,20 @@ jobs:
           python-version: '3.13'
       - name: Install pinned Rust
         run: rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
+      - name: Windows SDK resource compiler preflight
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $kits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
+          $sdk = Get-ChildItem $kits -Directory |
+            Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } |
+            Sort-Object { [version]$_.Name } -Descending |
+            Where-Object { Test-Path (Join-Path $_.FullName 'x64/rc.exe') } |
+            Select-Object -First 1
+          if (-not $sdk) { throw 'Windows SDK x64 rc.exe is required' }
+          $rcDir = Join-Path $sdk.FullName 'x64'
+          $rcDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          Write-Output "Windows SDK resource compiler: $rcDir/rc.exe"
       - name: Design and packaging regressions
         run: |
           python scripts/generate_design_tokens.py --check
@@ -43,6 +57,9 @@ jobs:
           python -m unittest discover -s scripts -p "test_macos_signing.py" -v
       - name: Locked dependencies
         run: cargo fetch --locked
+      - name: Windows native compile preflight
+        if: runner.os == 'Windows'
+        run: cargo check -p pasteleaf-windows --locked --all-targets
       - name: Rust format
         run: cargo fmt --all --check
       - name: Shared core lint
