@@ -330,7 +330,12 @@ fn invalid_paths_and_descriptor_links_are_not_followed() {
     let before = local_state(&mut engine);
     let file = tmp.path().join("ordinary-file");
     fs::write(&file, b"synthetic file").unwrap();
-    for directory in [file.clone(), file.join("child"), "relative-folder".into()] {
+    for directory in [
+        file.clone(),
+        file.join("child"),
+        file.join("child/grandchild"),
+        "relative-folder".into(),
+    ] {
         error(
             &mut engine,
             json!({"op":"sync_inspect","directory":directory}),

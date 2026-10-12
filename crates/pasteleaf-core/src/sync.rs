@@ -123,7 +123,29 @@ fn present(path: &Path) -> Result<bool> {
     }
 }
 fn existing_directory(path: &Path) -> Result<()> {
-    let m = fs::symlink_metadata(path).map_err(|e| sync_storage_error(e.into()))?;
+    let m = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // Windows reports PATH_NOT_FOUND even when a parent component is a file.
+            // Inspect existing ancestors read-only so invalid paths are not presented
+            // as merely missing cloud folders. Never create a parent while joining.
+            for parent in path.ancestors().skip(1) {
+                match fs::symlink_metadata(parent) {
+                    Ok(metadata) if !metadata.is_dir() || metadata.file_type().is_symlink() => {
+                        return Err(Error::new(
+                            "sync_path_invalid",
+                            "The selected sync path contains a non-directory component.",
+                        ));
+                    }
+                    Ok(_) => break,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(sync_storage_error(error.into())),
+                }
+            }
+            return Err(sync_storage_error(error.into()));
+        }
+        Err(error) => return Err(sync_storage_error(error.into())),
+    };
     if !m.is_dir() || m.file_type().is_symlink() {
         return Err(Error::new(
             "sync_path_invalid",
